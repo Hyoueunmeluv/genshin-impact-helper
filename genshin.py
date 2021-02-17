@@ -2,7 +2,7 @@
 @File                : genshin.py
 @Github              : https://github.com/y1ndan/genshin-impact-helper
 @Last modified by    : y1ndan
-@Last modified time  : 2021-01-13 11:10:30
+@Last modified time  : 2021-02-02 14:10:30
 '''
 import hashlib
 import json
@@ -12,12 +12,12 @@ import time
 import uuid
 import os
 
-import requests
-from requests.exceptions import HTTPError
-
-from settings import log, CONFIG
+from settings import log, CONFIG, req
 from notify import Notify
 
+
+def version():
+    return 'v1.6.11'
 
 def hexdigest(text):
     md5 = hashlib.md5()
@@ -41,60 +41,30 @@ class Base(object):
         }
         return header
 
-    @staticmethod
-    def to_python(json_str: str):
-        return json.loads(json_str)
-
-    @staticmethod
-    def to_json(obj):
-        return json.dumps(obj, indent=4, ensure_ascii=False)
-
 
 class Roles(Base):
     def get_awards(self):
-        response = dict()
+        response = {}
         try:
-            content = requests.Session().get(
-                CONFIG.AWARD_URL, headers=self.get_header()).text
-            response = self.to_python(content)
+            response = req.to_python(req.request(
+                'get', CONFIG.AWARD_URL, headers=self.get_header()).text)
         except json.JSONDecodeError as e:
-            log.error(e)
+            raise Exception(e)
 
         return response
 
-    def get_roles(self, max_attempt_number: int = 4):
+    def get_roles(self):
         log.info('准备获取账号信息...')
-        error = None
-        response = dict()
-
-        for i in range(1, max_attempt_number):
-            try:
-                content = requests.Session().get(
-                    CONFIG.ROLE_URL, headers=self.get_header()).text
-                response = self.to_python(content)
-            except HTTPError as error:
-                log.error(
-                    'HTTP error when get game roles, retry %s time(s)...' % i)
-                log.error('error is %s' % error)
-                continue
-            except KeyError as error:
-                log.error(
-                    'Wrong response to get game roles, retry %s time(s)...'% i)
-                log.error('response is %s' % error)
-                continue
-            except Exception as error:
-                log.error('Unknown error %s, die' % error)
-                raise Exception(error)
-            error = None
-            break
-
-        if error:
-            log.error(
-                'Maximum retry times have been reached, error is %s ' % error)
-            raise Exception(error)
+        response = {}
+        try:
+            response = req.to_python(req.request(
+                'get', CONFIG.ROLE_URL, headers=self.get_header()).text)
+            message = response['message']
+        except Exception as e:
+            raise Exception(e)
         if response.get(
             'retcode', 1) != 0 or response.get('data', None) is None:
-            raise Exception(response['message'])
+            raise Exception(message)
 
         log.info('账号信息获取完毕')
         return response
@@ -153,9 +123,9 @@ class Sign(Base):
             info_url = CONFIG.INFO_URL.format(
                 self._region_list[i], CONFIG.ACT_ID, self._uid_list[i])
             try:
-                content = requests.Session().get(
-                    info_url, headers=self.get_header()).text
-                info_list.append(self.to_python(content))
+                content = req.request(
+                    'get', info_url, headers=self.get_header()).text
+                info_list.append(req.to_python(content))
             except Exception as e:
                 raise Exception(e)
 
@@ -176,24 +146,25 @@ class Sign(Base):
 
             log.info(f'准备为旅行者 {i + 1} 号签到...')
             time.sleep(10)
-            messgae = {
+            message = {
                 'today': today,
                 'region_name': self._region_name_list[i],
                 'uid': uid,
-                'award_name': awards[total_sign_day]['name'],
-                'award_cnt': awards[total_sign_day]['cnt'],
                 'total_sign_day': total_sign_day,
                 'end': '',
             }
             if info_list[i]['data']['is_sign'] is True:
-                messgae['award_name'] = awards[total_sign_day - 1]['name']
-                messgae['award_cnt'] = awards[total_sign_day - 1]['cnt']
-                messgae['status'] = f'👀 旅行者 {i + 1} 号, 你已经签到过了哦'
-                message_list.append(self.message.format(**messgae))
+                message['award_name'] = awards[total_sign_day - 1]['name']
+                message['award_cnt'] = awards[total_sign_day - 1]['cnt']
+                message['status'] = f'👀 旅行者 {i + 1} 号, 你已经签到过了哦'
+                message_list.append(self.message.format(**message))
                 continue
+            else:
+                message['award_name'] = awards[total_sign_day]['name']
+                message['award_cnt'] = awards[total_sign_day]['cnt']
             if info_list[i]['data']['first_bind'] is True:
-                messgae['status'] = f'💪 旅行者 {i + 1} 号, 请先前往米游社App手动签到一次'
-                message_list.append(self.message.format(**messgae))
+                message['status'] = f'💪 旅行者 {i + 1} 号, 请先前往米游社App手动签到一次'
+                message_list.append(self.message.format(**message))
                 continue
 
             data = {
@@ -203,11 +174,9 @@ class Sign(Base):
             }
 
             try:
-                content = requests.Session().post(
-                    CONFIG.SIGN_URL,
-                    headers=self.get_header(),
-                    data=json.dumps(data, ensure_ascii=False)).text
-                response = self.to_python(content)
+                response = req.to_python(req.request(
+                    'post', CONFIG.SIGN_URL, headers=self.get_header(),
+                    data=json.dumps(data, ensure_ascii=False)).text)
             except Exception as e:
                 raise Exception(e)
             code = response.get('retcode', 99999)
@@ -216,27 +185,30 @@ class Sign(Base):
             if code != 0:
                 message_list.append(response)
                 continue
-            messgae['total_sign_day'] = total_sign_day + 1
-            messgae['status'] = response['message']
-            message_list.append(self.message.format(**messgae))
+            message['total_sign_day'] = total_sign_day + 1
+            message['status'] = response['message']
+            message_list.append(self.message.format(**message))
         log.info('签到完毕')
 
         return ''.join(message_list)
 
     @property
     def message(self):
-        return CONFIG.MESSGAE_TEMPLATE
+        return CONFIG.MESSAGE_TEMPLATE
 
 
 if __name__ == '__main__':
+    log.info(f'🌀原神签到小助手 {version()}')   
+    log.info('若签到失败, 请尝试更新!')
     log.info('任务开始')
     notify = Notify()
     msg_list = []
     ret = success_num = fail_num = 0
-    # ============= miHoYo BBS COOKIE ============
-    # 此处填米游社的COOKIE
-    # 注: Github Actions用户请到Settings->Secrets里设置,Name=COOKIE,Value=<获取的值>
-    # 多个账号的COOKIE值之间用 # 号隔开,例如: 1#2#3#4
+    """miHoYo BBS COOKIE
+    :param COOKIE: 米游社的COOKIE.多个账号的COOKIE值之间用 # 号隔开,例如: 1#2#3#4
+    """
+    # Github Actions用户请到Repo的Settings->Secrets里设置变量,变量名字必须与上述参数变量名字完全一致,否则无效!!!
+    # Name=<变量名字>,Value=<获取的值>
     COOKIE = ''
 
     if os.environ.get('COOKIE', '') != '':
